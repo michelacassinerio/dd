@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Conta Dadi">
+<meta name="theme-color" content="#121126">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}*,*::before,*::after{box-sizing:border-box}body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Conta Dadi</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800;900&display=swap">
+<style>
+/* Layout: a viewfinder on top with detected dice boxed in place, the stable total below it, controls at the bottom. Single dark look, like a camera app. */
+:root{
+  --bg:#121126;
+  --panel:#1f1e40;
+  --panel-hi:#2d2c5c;
+  --ink:#f3f1ff;
+  --muted:#8f8cbc;
+  --good:#5ef08f;
+  --live:#ffc83d;
+  --live-ink:#2a1d00;
+  --bad:#ff7b8c;
+  --font-display:"Lilita One","Arial Rounded MT Bold","Trebuchet MS",system-ui,sans-serif;
+  --font-body:"Nunito",ui-rounded,"Segoe UI",system-ui,sans-serif;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-weight:800;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));}
+button,label.btn{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+button:focus-visible,label.btn:focus-within{outline:2px solid var(--live);outline-offset:2px}
+.app{max-width:520px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;gap:14px;padding-block:14px 18px}
+
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+h1{margin:0;font-family:var(--font-display);font-weight:400;font-size:28px;letter-spacing:.01em}
+.mode{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap}
+.mode i{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.mode.on i{background:var(--bad);box-shadow:0 0 0 0 rgba(255,123,140,.6);animation:rec 1.4s infinite}
+@keyframes rec{70%{box-shadow:0 0 0 7px rgba(255,123,140,0)}100%{box-shadow:0 0 0 0 rgba(255,123,140,0)}}
+
+.finder{position:relative;border-radius:20px;overflow:hidden;background:#000;aspect-ratio:3/4;max-height:56vh;width:100%;max-width:100%;margin-inline:auto;box-shadow:0 0 0 1px rgba(255,255,255,.06)}
+.finder canvas{position:absolute;inset:0;width:100%;height:100%}
+.finder video{display:none}
+.tag{position:absolute;left:12px;top:12px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;background:rgba(18,17,38,.75);color:var(--muted);padding:4px 9px;border-radius:999px}
+.corner{position:absolute;width:26px;height:26px;border:3px solid rgba(255,255,255,.55);pointer-events:none}
+.corner.tl{left:14px;top:40px;border-right:0;border-bottom:0;border-radius:8px 0 0 0}
+.corner.tr{right:14px;top:40px;border-left:0;border-bottom:0;border-radius:0 8px 0 0}
+.corner.bl{left:14px;bottom:14px;border-right:0;border-top:0;border-radius:0 0 0 8px}
+.corner.br{right:14px;bottom:14px;border-left:0;border-top:0;border-radius:0 0 8px 0}
+
+.result{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:16px;background:var(--panel);border-radius:18px;padding:14px 18px}
+.total{font-family:var(--font-display);font-size:76px;line-height:.9;min-width:1.4em;text-align:center;font-variant-numeric:tabular-nums;color:var(--muted);transition:color .2s}
+.total.locked{color:var(--good)}
+.total.flash{animation:pop .4s cubic-bezier(.3,1.6,.5,1)}
+@keyframes pop{0%{transform:scale(.75)}100%{transform:scale(1)}}
+.detail{min-width:0;display:grid;gap:4px}
+.eq{font-family:var(--font-display);font-size:22px;color:var(--ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.status{font-size:13px;color:var(--muted);line-height:1.4}
+
+.controls{display:grid;gap:10px}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.row .lbl{flex-basis:100%;font-size:12px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.chip{height:34px;min-width:38px;padding:0 12px;border-radius:10px;background:var(--panel);font-family:var(--font-display);font-size:16px}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn,label.btn{height:50px;border-radius:14px;display:flex;align-items:center;justify-content:center;gap:8px;font-family:var(--font-display);font-size:18px;letter-spacing:.02em;background:var(--panel-hi)}
+.btn.primary,label.btn.primary{background:var(--live);color:var(--live-ink);box-shadow:0 4px 0 #b88a14}
+.btn.primary:active{transform:translateY(3px);box-shadow:0 1px 0 #b88a14}
+.btn svg{width:20px;height:20px}
+.btn input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.note{font-size:12.5px;color:var(--muted);line-height:1.5;margin:0}
+.note b{color:var(--ink);font-weight:800}
+@media (max-width:380px){.total{font-size:62px}.actions{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){.total.flash{animation:none}.mode.on i{animation:none}}
+</style>
+
+<div class="app">
+  <header>
+    <h1>Conta Dadi</h1>
+    <div class="mode" id="mode"><i></i><span id="modeTxt">Esempio</span></div>
+  </header>
+
+  <div class="finder" id="finder">
+    <video id="video" playsinline muted></video>
+    <canvas id="view" aria-label="Inquadratura con i dadi riconosciuti"></canvas>
+    <span class="tag" id="tag">Esempio</span>
+    <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+  </div>
+
+  <section class="result" aria-live="polite">
+    <div class="total" id="total">–</div>
+    <div class="detail">
+      <div class="eq" id="eq">–</div>
+      <div class="status" id="status">Cerco i dadi…</div>
+    </div>
+  </section>
+
+  <div class="controls">
+    <div class="row" id="expect">
+      <span class="lbl">Quanti dadi</span>
+      <button class="chip" data-n="0" aria-pressed="false">Auto</button>
+      <button class="chip" data-n="1" aria-pressed="false">1</button>
+      <button class="chip" data-n="2" aria-pressed="false">2</button>
+      <button class="chip" data-n="3" aria-pressed="false">3</button>
+      <button class="chip" data-n="4" aria-pressed="true">4</button>
+      <button class="chip" data-n="5" aria-pressed="false">5</button>
+      <button class="chip" data-n="6" aria-pressed="false">6</button>
+    </div>
+    <div class="row">
+      <span class="lbl">Colore</span>
+      <button class="chip" id="light" aria-pressed="true">Dadi chiari</button>
+      <button class="chip" id="dark" aria-pressed="false">Dadi scuri</button>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="liveBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><rect x="2.5" y="6" width="13" height="12" rx="2.5"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></svg><span id="liveTxt">Live</span></button>
+      <label class="btn" id="photoBtn"><input type="file" id="file" accept="image/*" capture="environment"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Scatta foto</label>
+    </div>
+    <p class="note" id="note"><b>Come inquadrare:</b> tieni i dadi interi dentro l'inquadratura e il telefono fermo. Funziona meglio con dadi chiari su sfondo scuro, come nel gioco. Se usi dadi scuri con i puntini bianchi, scegli “Dadi scuri”.</p>
+  </div>
+</div>
+
+<script>
+// Dice pip counter: pure function on RGBA pixels.
+// detectDice({data,width,height}, {invert}) -> {dice:[{x,y,w,h,value,pips:[{x,y,r}]}], sum, threshold}
+function detectDice(img, opts){
+  opts=opts||{};
+  const W=img.width,H=img.height,N=W*H,src=img.data;
+  const gray=new Uint8Array(N);
+  for(let i=0,j=0;i<N;i++,j+=4){
+    let g=(src[j]*77+src[j+1]*150+src[j+2]*29)>>8;
+    gray[i]=opts.invert?255-g:g;
+  }
+  // Otsu threshold
+  const hist=new Float64Array(256);for(let i=0;i<N;i++)hist[gray[i]]++;
+  let sumAll=0;for(let t=0;t<256;t++)sumAll+=t*hist[t];
+  let wB=0,sumB=0,best=0,thr=128;
+  for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=N-wB;if(!wF)break;sumB+=t*hist[t];
+    const mB=sumB/wB,mF=(sumAll-sumB)/wF,v=wB*wF*(mB-mF)*(mB-mF);if(v>best){best=v;thr=t;}}
+  thr=Math.max(thr,opts.minThr||70);
+  const bright=new Uint8Array(N);for(let i=0;i<N;i++)bright[i]=gray[i]>thr?1:0;
+
+  // label bright components
+  const lab=new Int32Array(N);const stack=new Int32Array(N);
+  const comps=[];let nl=0;
+  for(let s=0;s<N;s++){
+    if(!bright[s]||lab[s])continue;
+    nl++;let sp=0;stack[sp++]=s;lab[s]=nl;
+    let area=0,x0=W,y0=H,x1=0,y1=0,chroma=0;
+    while(sp){const p=stack[--sp];area++;const x=p%W,y=(p/W)|0;
+      {const j=p*4,r=src[j],g=src[j+1],b=src[j+2];chroma+=Math.max(r,g,b)-Math.min(r,g,b);}
+      if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+      if(x>0){const q=p-1;if(bright[q]&&!lab[q]){lab[q]=nl;stack[sp++]=q;}}
+      if(x<W-1){const q=p+1;if(bright[q]&&!lab[q]){lab[q]=nl;stack[sp++]=q;}}
+      if(y>0){const q=p-W;if(bright[q]&&!lab[q]){lab[q]=nl;stack[sp++]=q;}}
+      if(y<H-1){const q=p+W;if(bright[q]&&!lab[q]){lab[q]=nl;stack[sp++]=q;}}
+    }
+    comps.push({id:nl,area,x0,y0,x1,y1,chroma:chroma/area});
+  }
+
+  const dice=[];
+  const minDie=N*0.0012,maxDie=N*0.3;
+  const pl=new Int32Array(N); // pip labels (shared buffer, reset per die region)
+  for(const c of comps){
+    const bw=c.x1-c.x0+1,bh=c.y1-c.y0+1;
+    if(c.area<minDie||c.area>maxDie)continue;
+    const asp=bw/bh;if(asp<0.6||asp>1.67)continue;
+    if(!opts.invert&&c.chroma>(opts.maxChroma||55))continue; // dice faces are white/cream
+    if(c.x0===0||c.y0===0||c.x1===W-1||c.y1===H-1)continue; // cut by frame edge
+    // holes = dark regions inside bbox fully surrounded by this component
+    const pips=[];let holeArea=0;
+    for(let y=c.y0;y<=c.y1;y++)for(let x=c.x0;x<=c.x1;x++){
+      const s=y*W+x;if(bright[s]||pl[s]===c.id)continue;
+      let sp=0;stack[sp++]=s;pl[s]=c.id;
+      let area=0,ok=true,px0=x,px1=x,py0=y,py1=y,sx=0,sy=0;
+      while(sp){const p=stack[--sp];area++;const qx=p%W,qy=(p/W)|0;sx+=qx;sy+=qy;
+        if(qx<px0)px0=qx;if(qx>px1)px1=qx;if(qy<py0)py0=qy;if(qy>py1)py1=qy;
+        if(qx<=c.x0||qx>=c.x1||qy<=c.y0||qy>=c.y1)ok=false;
+        const nb=[qx>0?p-1:-1,qx<W-1?p+1:-1,qy>0?p-W:-1,qy<H-1?p+W:-1];
+        for(const q of nb){if(q<0)continue;
+          if(bright[q]){if(lab[q]!==c.id)ok=false;}
+          else if(pl[q]!==c.id){const rx=q%W,ry=(q/W)|0;
+            if(rx<c.x0||rx>c.x1||ry<c.y0||ry>c.y1){ok=false;continue;}
+            pl[q]=c.id;stack[sp++]=q;}
+        }
+      }
+      if(!ok)continue;
+      holeArea+=area;
+      pips.push({area,x0:px0,y0:py0,x1:px1,y1:py1,cx:sx/area,cy:sy/area});
+    }
+    const solid=c.area+holeArea;
+    const fill=solid/(bw*bh);
+    if(fill<0.6)continue; // digits, text, outlines
+    // keep round-ish pips of plausible size; size relative to the largest blob
+    const cand=pips.filter(p=>{const w=p.x1-p.x0+1,h=p.y1-p.y0+1,a=w/h;
+      return p.area>=Math.max(3,solid*0.006)&&p.area<=solid*0.14&&a>0.45&&a<2.2&&p.area/(w*h)>0.45;});
+    if(!cand.length)continue;
+    const maxA=Math.max(...cand.map(p=>p.area));
+    const good=cand.filter(p=>p.area>=maxA*0.35);
+    if(good.length<1||good.length>6)continue;
+    // layout sanity: pips centred on the face and spread across it
+    const sz=Math.min(bw,bh),mx=good.reduce((a,p)=>a+p.cx,0)/good.length,my=good.reduce((a,p)=>a+p.cy,0)/good.length;
+    const ccx=(c.x0+c.x1)/2,ccy=(c.y0+c.y1)/2;
+    if(Math.hypot(mx-ccx,my-ccy)>sz*0.22)continue;
+    if(good.length>1){let dm=0;for(const a of good)for(const b of good)dm=Math.max(dm,Math.hypot(a.cx-b.cx,a.cy-b.cy));
+      if(dm<sz*0.38)continue;}
+    dice.push({x:c.x0,y:c.y0,w:bw,h:bh,value:good.length,
+      pips:good.map(p=>({x:p.cx,y:p.cy,r:Math.sqrt(p.area/Math.PI)}))});
+  }
+  dice.sort((a,b)=>(a.y-b.y)||(a.x-b.x));
+  return {dice,sum:dice.reduce((s,d)=>s+d.value,0),threshold:thr};
+}
+if(typeof module!=='undefined')module.exports={detectDice};
+
+
+(function(){
+const $=id=>document.getElementById(id);
+const view=$('view'),vctx=view.getContext('2d');
+const work=document.createElement('canvas'),wctx=work.getContext('2d',{willReadFrequently:true});
+let expectN=4,invert=false,stream=null,running=false;
+let history=[],locked=null;
+
+/* ---------- drawing ---------- */
+function fitView(){
+  const r=view.getBoundingClientRect(),dpr=Math.min(2,devicePixelRatio||1);
+  const w=Math.round(r.width*dpr),h=Math.round(r.height*dpr);
+  if(view.width!==w||view.height!==h){view.width=w;view.height=h;}
+  return {w,h,dpr};
+}
+// draw source covering the view; return mapping from work-canvas coords to view coords
+function drawSource(src,sw,sh){
+  const {w,h}=fitView();
+  const s=Math.max(w/sw,h/sh),dw=sw*s,dh=sh*s,ox=(w-dw)/2,oy=(h-dh)/2;
+  vctx.drawImage(src,ox,oy,dw,dh);
+  return {s,ox,oy};
+}
+function drawDice(res,map,scaleWork,ok){
+  const dpr=Math.min(2,devicePixelRatio||1);
+  const k=map.s/scaleWork;
+  for(const d of res.dice){
+    const x=map.ox+d.x*k,y=map.oy+d.y*k,w=d.w*k,h=d.h*k,pad=4*dpr;
+    vctx.lineWidth=3*dpr;vctx.strokeStyle=ok?'#5ef08f':'#ffc83d';
+    roundRect(x-pad,y-pad,w+pad*2,h+pad*2,10*dpr);vctx.stroke();
+    for(const p of d.pips){vctx.beginPath();vctx.arc(map.ox+p.x*k,map.oy+p.y*k,Math.max(2*dpr,p.r*k*0.45),0,Math.PI*2);vctx.fillStyle=ok?'#5ef08f':'#ffc83d';vctx.fill();}
+    const r=13*dpr,cx=x+w+pad,cy=y-pad;
+    vctx.beginPath();vctx.arc(cx,cy,r,0,Math.PI*2);vctx.fillStyle=ok?'#5ef08f':'#ffc83d';vctx.fill();
+    vctx.fillStyle='#121126';vctx.font=`${16*dpr}px "Lilita One", "Trebuchet MS", sans-serif`;vctx.textAlign='center';vctx.textBaseline='middle';
+    vctx.fillText(String(d.value),cx,cy+1*dpr);
+  }
+}
+function roundRect(x,y,w,h,r){vctx.beginPath();vctx.moveTo(x+r,y);vctx.arcTo(x+w,y,x+w,y+h,r);vctx.arcTo(x+w,y+h,x,y+h,r);vctx.arcTo(x,y+h,x,y,r);vctx.arcTo(x,y,x+w,y,r);vctx.closePath();}
+
+/* ---------- detection helpers ---------- */
+function analyse(src,sw,sh,maxSide,inv){
+  const s=maxSide/Math.max(sw,sh);
+  const w=Math.max(1,Math.round(sw*s)),h=Math.max(1,Math.round(sh*s));
+  if(work.width!==w||work.height!==h){work.width=w;work.height=h;}
+  wctx.drawImage(src,0,0,w,h);
+  const img=wctx.getImageData(0,0,w,h);
+  const res=detectDice(img,{invert:inv});
+  orderDice(res);
+  return {res,scale:s};
+}
+function orderDice(res){
+  if(!res.dice.length)return;
+  const hs=res.dice.map(d=>d.h).sort((a,b)=>a-b),mh=hs[hs.length>>1];
+  res.dice.sort((a,b)=>{const ra=Math.round((a.y+a.h/2)/mh),rb=Math.round((b.y+b.h/2)/mh);return ra-rb||a.x-b.x;});
+}
+const valid=res=>res.dice.length>0&&(expectN===0||res.dice.length===expectN);
+const keyOf=res=>res.dice.map(d=>d.value).join('+');
+
+/* ---------- result panel ---------- */
+function showResult(res,isLocked,msg){
+  const t=$('total');
+  if(isLocked){
+    const changed=t.textContent!==String(res.sum)||!t.classList.contains('locked');
+    t.textContent=res.sum;t.classList.add('locked');
+    if(changed){t.classList.remove('flash');void t.offsetWidth;t.classList.add('flash');try{navigator.vibrate&&navigator.vibrate(30)}catch(e){}}
+    $('eq').textContent=res.dice.map(d=>d.value).join(' + ')+' = '+res.sum;
+  }
+  $('status').textContent=msg;
+}
+
+/* ---------- live camera ---------- */
+async function startLive(){
+  if(running){stopLive();return;}
+  $('status').textContent='Apro la fotocamera…';
+  try{
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('nogum');
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:960}},audio:false});
+  }catch(e){
+    stream=null;
+    $('status').textContent='La fotocamera live non è disponibile qui. Usa “Scatta foto”: si apre la fotocamera del telefono e il totale appare subito dopo lo scatto.';
+    $('liveBtn').disabled=true;$('liveBtn').style.opacity=.45;
+    return;
+  }
+  const v=$('video');v.srcObject=stream;await v.play().catch(()=>{});
+  running=true;history=[];locked=null;lastVT=-1;
+  $('mode').classList.add('on');$('modeTxt').textContent='Live';$('tag').textContent='Live';$('liveTxt').textContent='Ferma';
+  $('total').textContent='–';$('total').classList.remove('locked');$('eq').textContent='–';
+  loop();
+}
+function stopLive(){
+  running=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  $('mode').classList.remove('on');$('modeTxt').textContent='In pausa';$('tag').textContent='In pausa';$('liveTxt').textContent='Live';
+}
+const NEED=4,HOLD_MS=200; // identical consecutive *new* frames, held for a moment, before the total is trusted
+let lastVT=-1,sameSince=0;
+function loop(){
+  if(!running)return;
+  const v=$('video');
+  if(v.readyState>=2&&v.videoWidth&&v.currentTime!==lastVT){
+    lastVT=v.currentTime;
+    const now=performance.now();
+    const {res,scale}=analyse(v,v.videoWidth,v.videoHeight,340,invert);
+    const map=drawSource(v,v.videoWidth,v.videoHeight);
+    const ok=valid(res);
+    const key=ok?keyOf(res):'';
+    if(!history.length||key!==history[history.length-1])sameSince=now;
+    history.push(key);if(history.length>NEED)history.shift();
+    const stable=ok&&history.length===NEED&&history.every(k=>k===history[0])&&now-sameSince>=HOLD_MS;
+    drawDice(res,map,scale,stable);
+    if(stable){locked=res;showResult(res,true,'Dadi fermi: totale confermato.');}
+    else if(!res.dice.length)showResult(null,false,locked?'Ultimo totale confermato. Cerco i dadi…':'Cerco i dadi…');
+    else if(!ok)showResult(null,false,`Vedo ${res.dice.length} ${res.dice.length===1?'dado':'dadi'}, ne aspetto ${expectN}.`);
+    else showResult(null,false,'Dadi in movimento, aspetto che si fermino…');
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ---------- photo ---------- */
+async function fromFile(file){
+  if(!file)return;
+  if(running)stopLive();
+  let bmp;
+  try{bmp=await createImageBitmap(file);}catch(e){
+    try{bmp=await new Promise((ok,ko)=>{const im=new Image();im.onload=()=>ok(im);im.onerror=ko;im.src=URL.createObjectURL(file);});}
+    catch(e2){$('status').textContent='Non riesco ad aprire questa immagine. Prova con una foto JPG o PNG.';return;}
+  }
+  const sw=bmp.width||bmp.naturalWidth,sh=bmp.height||bmp.naturalHeight;
+  runStill(bmp,sw,sh,'Foto');
+}
+function runStill(src,sw,sh,label){
+  // try a few working sizes (and the other colour mode) and keep the best reading
+  let best=null;
+  const tries=[[360,invert],[520,invert],[260,invert],[360,!invert],[520,!invert]];
+  for(const [m,inv] of tries){
+    const r=analyse(src,sw,sh,m,inv);
+    const score=(valid(r.res)?100:0)+r.res.dice.length;
+    if(!best||score>best.score)best={...r,score,inv};
+    if(valid(r.res)&&inv===invert)break;
+  }
+  const map=drawSource(src,sw,sh);
+  const ok=valid(best.res);
+  drawDice(best.res,map,best.scale,ok);
+  $('modeTxt').textContent=label;$('tag').textContent=label;
+  const n=best.res.dice.length;
+  $('total').classList.remove('locked');
+  if(ok)showResult(best.res,true,label==='Esempio'?'Questo è un esempio. Scatta una foto o usa la fotocamera live.':'Totale letto dalla foto.');
+  else if(n){$('total').textContent=best.res.sum;$('eq').textContent=best.res.dice.map(d=>d.value).join(' + ')+' = '+best.res.sum;
+    $('status').textContent=`Ho trovato ${n} ${n===1?'dado':'dadi'} invece di ${expectN}. Controlla che siano tutti interi e ben illuminati.`;}
+  else{$('total').textContent='–';$('eq').textContent='–';$('status').textContent='Non trovo dadi in questa foto. Avvicinati e usa uno sfondo che contrasti con i dadi.';}
+}
+
+/* ---------- sample scene (drawn, not a photo) ---------- */
+function sampleScene(){
+  const c=document.createElement('canvas');c.width=600;c.height=800;const g=c.getContext('2d');
+  const bg=g.createRadialGradient(300,360,60,300,400,520);bg.addColorStop(0,'#24234a');bg.addColorStop(1,'#121126');g.fillStyle=bg;g.fillRect(0,0,600,800);
+  const P={1:[[0,0]],2:[[-1,-1],[1,1]],3:[[-1,-1],[0,0],[1,1]],4:[[-1,-1],[1,-1],[-1,1],[1,1]],5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]],6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
+  const dice=[[195,300,3,-.12],[405,290,5,.08],[200,520,2,.1],[400,515,6,-.05]];
+  for(const [x,y,v,a] of dice){
+    g.save();g.translate(x,y);g.rotate(a);
+    g.shadowColor='rgba(0,0,0,.45)';g.shadowBlur=24;g.shadowOffsetY=10;
+    const s=150,r=26;g.fillStyle='#f6f3ea';g.beginPath();g.moveTo(-s/2+r,-s/2);g.arcTo(s/2,-s/2,s/2,s/2,r);g.arcTo(s/2,s/2,-s/2,s/2,r);g.arcTo(-s/2,s/2,-s/2,-s/2,r);g.arcTo(-s/2,-s/2,s/2,-s/2,r);g.fill();
+    g.shadowColor='transparent';g.fillStyle='#18172e';
+    for(const [px,py] of P[v]){g.beginPath();g.arc(px*38,py*38,14,0,Math.PI*2);g.fill();}
+    g.restore();
+  }
+  return c;
+}
+
+/* ---------- wire up ---------- */
+$('expect').addEventListener('click',e=>{const b=e.target.closest('[data-n]');if(!b)return;expectN=+b.dataset.n;
+  document.querySelectorAll('#expect [data-n]').forEach(x=>x.setAttribute('aria-pressed',x===b?'true':'false'));history=[];
+  if(!running&&lastStill)runStill(...lastStill);});
+$('light').addEventListener('click',()=>{invert=false;$('light').setAttribute('aria-pressed','true');$('dark').setAttribute('aria-pressed','false');history=[];if(!running&&lastStill)runStill(...lastStill);});
+$('dark').addEventListener('click',()=>{invert=true;$('dark').setAttribute('aria-pressed','true');$('light').setAttribute('aria-pressed','false');history=[];if(!running&&lastStill)runStill(...lastStill);});
+$('liveBtn').addEventListener('click',startLive);
+let lastStill=null;
+$('file').addEventListener('change',async e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(!f)return;
+  let bmp;try{bmp=await createImageBitmap(f);}catch(err){bmp=null;}
+  if(bmp){lastStill=[bmp,bmp.width,bmp.height,'Foto'];runStill(...lastStill);}else fromFile(f);});
+addEventListener('resize',()=>{if(!running&&lastStill)runStill(...lastStill);});
+
+const demo=sampleScene();lastStill=[demo,demo.width,demo.height,'Esempio'];
+requestAnimationFrame(()=>runStill(...lastStill));
+})();
+</script>
+
+</body>
+</html>
