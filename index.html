@@ -39,6 +39,7 @@ video{object-fit:contain;background:#000}
 #ans{font:800 54px/1 system-ui,sans-serif;font-variant-numeric:tabular-nums;min-width:2.4ch;color:var(--dim);text-shadow:0 2px 12px rgba(0,0,0,.6)}
 #ans.ok{color:var(--ok)}
 #ans.guess{color:var(--warn)}
+#ans.prob{color:#8ff0ad}
 #info{display:flex;flex-direction:column;gap:2px;min-width:0}
 #qtxt{font-weight:700;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #stat{font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
@@ -64,7 +65,8 @@ video{object-fit:contain;background:#000}
     <button class="big alt" id="btnScreen" disabled>Condividi schermo <small>solo da PC</small></button>
     <div id="loadState">Carico il motore di lettura…</div>
     <ul class="tips">
-      <li>Tieni il telefono col gioco a 15–25 cm, dritto, con luminosità alta.</li>
+      <li>Inquadra il gioco grande: domanda e 4 bottoni devono riempire quasi tutta la larghezza dell'immagine. Più è grande, meglio legge i numeri sui bottoni.</li>
+      <li>Tienilo dritto ed evita riflessi; luminosità dello schermo alta.</li>
       <li>Devono vedersi la domanda e tutti e 4 i bottoni colorati.</li>
       <li>Il numero in alto è il risultato: verde = confermato tra le 4 risposte.</li>
     </ul>
@@ -249,9 +251,21 @@ function binarize(sx, sy, sw, sh, targetH, mode){
   tmp.width = outW; tmp.height = outH;
   tctx.drawImage(vid, sx, sy, sw, sh, 0, 0, outW, outH);
   const d = tctx.getImageData(0, 0, outW, outH).data;
+  const v0 = new Uint8Array(outW*outH);
+  for(let i = 0, j = 0; i < v0.length; i++, j += 4){
+    if(mode === 'a'){              // "whiteness": white digits ≈ 255, coloured pill much lower, even when over-exposed
+      const mx = Math.max(d[j], d[j+1], d[j+2]), mn = Math.min(d[j], d[j+1], d[j+2]);
+      v0[i] = mx ? Math.round((mn / mx) * (mx / 255) ** .35 * 255) : 0;
+    } else v0[i] = (d[j]*77 + d[j+1]*150 + d[j+2]*29) >> 8;
+  }
+  // 3×3 box blur against sensor noise and screen moiré
   const v = new Uint8Array(outW*outH);
-  for(let i = 0, j = 0; i < v.length; i++, j += 4)
-    v[i] = mode === 'a' ? Math.min(d[j], d[j+1], d[j+2]) : (d[j]*77 + d[j+1]*150 + d[j+2]*29) >> 8;
+  for(let y = 0; y < outH; y++) for(let x = 0; x < outW; x++){
+    let s = 0, n = 0;
+    for(let dy = -1; dy <= 1; dy++){ const yy = y+dy; if(yy < 0 || yy >= outH) continue;
+      for(let dx = -1; dx <= 1; dx++){ const xx = x+dx; if(xx < 0 || xx >= outW) continue; s += v0[yy*outW+xx]; n++ } }
+    v[y*outW+x] = s / n;
+  }
   const t = otsu(v);
   // background = whatever the border is
   let bs = 0, bn = 0;
@@ -265,7 +279,25 @@ function binarize(sx, sy, sw, sh, targetH, mode){
     const val = v[y*outW + x], isText = bgBright ? val < t : val > t;
     if(isText){ g[(y+pad)*W + x + pad] = 0; ink++ }
   }
+  despeckle(g, W, H);
   return {W, H, g, ink: ink/(outW*outH)};
+}
+// drop ink blobs much smaller than the biggest one (noise, glare, bits of the pill edge)
+function despeckle(g, W, H){
+  const lab = new Int32Array(W*H), sizes = [0], stack = [];
+  let id = 0;
+  for(let i = 0; i < g.length; i++){
+    if(g[i] !== 0 || lab[i]) continue;
+    id++; let n = 0; stack.push(i); lab[i] = id;
+    while(stack.length){
+      const k = stack.pop(), x = k % W; n++;
+      for(const nb of [x > 0 ? k-1 : -1, x < W-1 ? k+1 : -1, k-W, k+W])
+        if(nb >= 0 && nb < g.length && g[nb] === 0 && !lab[nb]){ lab[nb] = id; stack.push(nb) }
+    }
+    sizes.push(n);
+  }
+  const big = Math.max(0, ...sizes), min = big * .12;
+  for(let i = 0; i < g.length; i++) if(lab[i] && sizes[lab[i]] < min) g[i] = 255;
 }
 function toPGM(img){
   const head = new TextEncoder().encode(`P5\n${img.W} ${img.H}\n255\n`);
@@ -362,7 +394,7 @@ function solve(qraw, answers){
   return null;
 }
 
-let raw = null, last = null, lastSeen = 0, cycles = 0, fpsT = performance.now(), fps = 0, lastMs = 0;
+let btnPx = 0, raw = null, last = null, lastSeen = 0, cycles = 0, fpsT = performance.now(), fps = 0, lastMs = 0;
 const OPSIGN = {'+':'+', '-':'−', 'x':'×'};
 
 function readLine(res, line, glyphSets){
@@ -382,11 +414,50 @@ function readLine(res, line, glyphSets){
 }
 const num = s => s ? parseInt(s, 10) : NaN;
 
+/* ---------- self-learned digit templates (same font in question and buttons) ---------- */
+const TPL = [];                         // {d, v}
+const GW = 8, GH = 12;
+function glyphVec(im, r){
+  const w = r.x1 - r.x0, h = r.y1 - r.y0, v = new Float32Array(GW*GH + 1);
+  for(let gy = 0; gy < GH; gy++) for(let gx = 0; gx < GW; gx++){
+    const xa = r.x0 + Math.floor(gx*w/GW), xb = r.x0 + Math.max(Math.floor((gx+1)*w/GW), Math.floor(gx*w/GW)+1);
+    const ya = r.y0 + Math.floor(gy*h/GH), yb = r.y0 + Math.max(Math.floor((gy+1)*h/GH), Math.floor(gy*h/GH)+1);
+    let ink = 0, n = 0;
+    for(let y = ya; y < yb; y++) for(let x = xa; x < xb; x++){ n++; if(im.g[y*im.W + x] === 0) ink++ }
+    v[gy*GW + gx] = n ? ink/n : 0;
+  }
+  v[GW*GH] = Math.min(1.5, w/h);         // aspect: tells "1" apart
+  return v;
+}
+function vdist(a, b){ let s = 0; for(let i = 0; i < GW*GH; i++){ const d = a[i]-b[i]; s += d*d } const da = (a[GW*GH]-b[GW*GH])*3; return (s + da*da*GW*GH*.1) / (GW*GH) }
+function learn(im, runs, str){
+  if(!runs || runs.length !== str.length) return;
+  runs.forEach((r, i) => {
+    const d = str[i], same = TPL.filter(t => t.d === d);
+    if(same.length >= 6) TPL.splice(TPL.indexOf(same[0]), 1);
+    TPL.push({d, v: glyphVec(im, r)});
+  });
+}
+function readGlyphs(im, runs){
+  if(!runs || !runs.length || !TPL.length) return '';
+  let out = '';
+  for(const r of runs){
+    const v = glyphVec(im, r), best = {};
+    for(const t of TPL){ const dd = vdist(v, t.v); if(!(t.d in best) || dd < best[t.d]) best[t.d] = dd }
+    const ranked = Object.entries(best).sort((x, y) => x[1] - y[1]);
+    if(!ranked.length || ranked[0][1] > .08 || (ranked[1] && ranked[0][1] > .7*ranked[1][1])) return '';
+    out += ranked[0][0];
+  }
+  return out;
+}
+
+
 async function step(){
   const det = detect();
   if(!det){ return false }
   const [P, G] = det.btn;
   const bh = (P.y1-P.y0 + G.y1-G.y0) / 2, top = Math.min(P.y0, G.y0);
+  btnPx = bh;
   const left = P.x0, span = G.x1 - left;
   // question line sits centred ~1.1 button-heights above the buttons
   const qImg = binarize(left + span*.03, top - 1.62*bh, span*.94, .96*bh, 96, 'q');
@@ -400,48 +471,84 @@ async function step(){
   const build = TH => composeLine([
     pq ? renderGlyphs(qImg, pq.A, TH) : null, pq ? renderGlyphs(qImg, pq.B, TH) : null,
     ...aImgs.map((im, k) => aRuns[k].length ? renderGlyphs(im, aRuns[k], TH) : null)], TH);
-  const L1 = build(34), L2 = build(42);
+  const L1 = build(34), L2 = build(42), L3 = build(28);
   const out = {text:false, blocks:true, hocr:false, tsv:false};
   const t0 = performance.now();
-  const jobs = [wA.recognize(toPGM(L1), {}, out), wB.recognize(toPGM(L2), {}, out)];
-  if(!pq) jobs.push(wQ.recognize(toPGM(qImg), {}, {text:true, blocks:false, hocr:false, tsv:false}));
+  const jobs = [wA.recognize(toPGM(L1), {}, out), wB.recognize(toPGM(L2), {}, out),
+    pq ? wQ.recognize(toPGM(L3), {}, out) : wQ.recognize(toPGM(qImg), {}, {text:true, blocks:false, hocr:false, tsv:false})];
   const res = await Promise.all(jobs);
   lastMs = performance.now() - t0;
 
   const reads = [readLine(res[0], L1, glyphSets), readLine(res[1], L2, glyphSets)];
-  let sol = null, answers = null, qtext = '';
-  for(const p of reads){
-    const ans = p.slice(2).map(num);
-    let cand;
-    if(pq){
-      const a = num(p[0]), b = num(p[1]);
-      if(!Number.isFinite(a) || !Number.isFinite(b)) continue;
-      const r = OPS[pq.op](a, b);
-      cand = {a, b, op: pq.op, r, ok: ans.includes(r)};
-    } else {
-      qtext = res[2].data.text.trim();
-      cand = solve(qtext, ans);
+  if(pq) reads.push(readLine(res[2], L3, glyphSets));
+  // fourth "pass": the digit shapes learned so far
+  const imgs = [qImg, qImg, ...aImgs];
+  if(TPL.length) reads.push(glyphSets.map((g, k) => readGlyphs(imgs[k], g)));
+
+  // question: take the operands most passes agree on
+  let sol = null, qtext = '';
+  if(pq){
+    const votes = new Map();
+    for(const p of reads){ const a = num(p[0]), b = num(p[1]); if(Number.isFinite(a) && Number.isFinite(b)){ const k = a + ',' + b; votes.set(k, (votes.get(k) || 0) + 1) } }
+    // prefer operands whose result shows up on a button
+    let best = null;
+    for(const [k, n] of votes){
+      const [a, b] = k.split(',').map(Number), r = OPS[pq.op](a, b);
+      const onBtn = reads.some(p => p.slice(2).map(num).includes(r));
+      const score = n + (onBtn ? 10 : 0);
+      if(!best || score > best.score) best = {a, b, op: pq.op, r, score};
     }
-    if(!cand) continue;
-    if(!sol || (cand.ok && !sol.ok)){ sol = cand; answers = ans }
-    if(sol.ok) break;
+    if(best) sol = {a: best.a, b: best.b, op: best.op, r: best.r};
+  } else {
+    qtext = res[2].data.text.trim();
+    for(const p of reads){ const c = solve(qtext, p.slice(2).map(num)); if(c && (!sol || c.ok)){ sol = c; if(c.ok) break } }
   }
-  if(!answers) answers = reads[0].slice(2).map(num);
-  if(pq) qtext = `${reads[0][0]} ${OPSIGN[pq.op]} ${reads[0][1]}`;
-  const idx = sol && sol.ok ? answers.indexOf(sol.r) : -1;
-  if(sol) qtext = `${sol.a} ${OPSIGN[sol.op]} ${sol.b}`;
+
+  // answers: every reading of each button across passes
+  const slotVals = [0, 1, 2, 3].map(k => reads.map(p => num(p[k+2])));
+  const answers = slotVals.map(vs => { const f = vs.filter(Number.isFinite); return f.length ? f.sort((x, y) => f.filter(v => v === y).length - f.filter(v => v === x).length)[0] : NaN });
+  let idx = -1, sure = false;
+  if(sol){
+    const hits = slotVals.map(vs => vs.includes(sol.r));
+    if(hits.filter(Boolean).length === 1){ idx = hits.indexOf(true); sure = true }
+    else if(!hits.some(Boolean)){
+      // elimination: three buttons clearly show another number → the fourth is the answer
+      const rDigits = String(sol.r).length;
+      const notR = slotVals.map(vs => vs.filter(Number.isFinite).length >= 2 && vs.every(v => !Number.isFinite(v) || v !== sol.r));
+      if(notR.filter(Boolean).length === 3){
+        const k = notR.indexOf(false);
+        if(!aRuns[k].length || aRuns[k].length === rDigits) idx = k;
+      }
+    }
+    sol.ok = sure;
+    if(sure && pq){                       // confirmed frame: remember what these digits look like
+      learn(qImg, pq.A, String(sol.a)); learn(qImg, pq.B, String(sol.b)); learn(aImgs[idx], aRuns[idx], String(sol.r));
+      // other buttons: learn only when at least two OCR passes agree and the digit count matches
+      slotVals.forEach((vs, k) => {
+        if(k === idx) return;
+        const f = vs.slice(0, 3).filter(Number.isFinite), v = f[0];
+        if(f.length >= 2 && f.filter(x => x === v).length >= 2 && f.every(x => x === v)) learn(aImgs[k], aRuns[k], String(v));
+      });
+    }
+    sol.probable = !sure && idx >= 0;
+    qtext = `${sol.a} ${OPSIGN[sol.op]} ${sol.b}`;
+  }
 
   raw = {qtext, reads};
   const now = performance.now();
-  const lastOk = last && last.sol && last.sol.ok;
-  const sameAns = lastOk && answers.filter((v, i) => v === last.answers[i]).length >= 3;
-  const sameQ = lastOk && ((sol && sol.a === last.sol.a && sol.b === last.sol.b && sol.op === last.sol.op) || (!sol && sameAns) || (sol && !sol.ok && sameAns && sol.a === last.sol.a));
-  if(sol && sol.ok){ last = {det, sol, idx, answers, qtext}; lastSeen = now }
-  else if(sameQ){ last.det = det; lastSeen = now; return true }      // same question still on screen: keep the circle
+  const prev = last && last.idx >= 0 ? last : null;
+  const sameQuestion = prev && sol && sol.a === prev.sol.a && sol.b === prev.sol.b && sol.op === prev.sol.op;
+  const sameScreen = prev && answers.filter((v, i) => v === prev.answers[i]).length >= 3;
+  const keep = () => { prev.det = det; lastSeen = now; return true };   // same question still on screen: keep the circle
+  if(sol && idx >= 0){
+    if(sameQuestion && prev.sol.ok && !sol.ok) return keep();           // never downgrade a sure circle
+    last = {det, sol, idx, answers, qtext}; lastSeen = now;
+  }
+  else if(prev && (sameQuestion || (sameScreen && (!sol || sol.a === prev.sol.a)))) return keep();
   else if(sol){ last = {det, sol, idx: -1, answers, qtext}; lastSeen = now }
   else if(last){ last.idx = -1 }                                     // unreadable frame: never leave an old circle up
   showText(sol, qtext, answers);
-  if($('debug').classList.contains('on')) showDebug(L1, qtext, answers);
+  if($('debug').classList.contains('on')) showDebug(L1, qtext, answers, slotVals);
   return true;
 }
 
@@ -449,14 +556,15 @@ function showText(sol, qtext, answers){
   const el = $('ans');
   if(sol){
     el.textContent = sol.r;
-    el.className = sol.ok ? 'ok' : 'guess';
-    $('qtxt').textContent = `${sol.a} ${OPSIGN[sol.op]} ${sol.b} = ${sol.r}`;
+    el.className = sol.ok ? 'ok' : sol.probable ? 'prob' : 'guess';
+    $('qtxt').textContent = `${sol.a} ${OPSIGN[sol.op]} ${sol.b} = ${sol.r}` +
+      (!sol.ok && !sol.probable && btnPx && btnPx < 110 ? ' · avvicina il telefono' : '');
   } else if(performance.now() - lastSeen > 800){
     el.textContent = '–'; el.className = '';
     $('qtxt').textContent = qtext ? `Leggo “${qtext}”…` : 'Leggo…';
   }
 }
-function showDebug(line, qtext, answers){
+function showDebug(line, qtext, answers, slotVals){
   const dbg = $('debug'); dbg.innerHTML = '';
   for(const im of [line]){
     const c = document.createElement('canvas'); c.width = im.W; c.height = im.H;
@@ -465,7 +573,7 @@ function showDebug(line, qtext, answers){
     c.getContext('2d').putImageData(id, 0, 0); dbg.appendChild(c);
   }
   const p = document.createElement('div');
-  p.textContent = `domanda: "${qtext}"  risposte: ${answers.map(a => isNaN(a) ? '?' : a).join(' | ')}`;
+  p.textContent = `domanda: "${qtext}"  risposte: ${slotVals.map(vs => vs.map(a => isNaN(a) ? '?' : a).join('/')).join(' | ')}`;
   dbg.appendChild(p);
 }
 
@@ -480,10 +588,11 @@ async function loop(){
     cycles++;
     const now = performance.now();
     if(now - fpsT > 1000){ fps = cycles*1000/(now-fpsT); cycles = 0; fpsT = now }
-    $('stat').textContent = `${fps.toFixed(1)} letture/s · OCR ${lastMs.toFixed(0)} ms`;
+    const size = !btnPx ? '' : btnPx < 110 ? ' · gioco troppo piccolo, avvicina' : ' · distanza ok';
+    $('stat').textContent = `${fps.toFixed(1)} letture/s · OCR ${lastMs.toFixed(0)} ms${size}`;
   }
 }
-window.__solver = {solve, get last(){ return last }, get raw(){ return raw }, get fps(){ return fps }, get ms(){ return lastMs }};
+window.__solver = {solve, TPL, get last(){ return last }, get raw(){ return raw }, get fps(){ return fps }, get ms(){ return lastMs }};
 
 /* ---------- 4. overlay ---------- */
 function resizeOv(){ const r = devicePixelRatio || 1; ov.width = innerWidth*r; ov.height = innerHeight*r; octx.setTransform(r, 0, 0, r, 0, 0) }
@@ -506,6 +615,7 @@ function draw(){
       octx.save();
       octx.shadowColor = 'rgba(47,227,107,.9)'; octx.shadowBlur = 18;
       octx.strokeStyle = '#2fe36b'; octx.lineWidth = Math.max(6, m.h*.09);
+      if(L.sol.probable) octx.setLineDash([m.h*.22, m.h*.12]);   // dashed = chosen by elimination
       octx.beginPath(); octx.ellipse(cx, cy, m.w*.62, m.h*.78, 0, 0, Math.PI*2); octx.stroke();
       octx.restore();
     }
